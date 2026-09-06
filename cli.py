@@ -12834,6 +12834,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._handle_fast_command(cmd_original)
         elif canonical == "compress":
             self._manual_compress(cmd_original)
+        elif canonical in {"quota", "gquota"}:
+            self._handle_quota_command(cmd_original)
         elif canonical == "usage":
             self._handle_usage_command(cmd_original)
         elif canonical == "subscription":
@@ -14149,6 +14151,20 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 print(f"  ❌ Compression failed: {e}")
 
 
+
+    def _handle_quota_command(self, cmd_original: str):
+        """Dispatch `/quota` or `/gquota` -- show Gemini quota without LLM call."""
+        from agent.gemini_quota_manager import get_quota_manager
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+        model_cfg = cfg.get("model", {})
+        primary_model = model_cfg.get("default", "gemini-3.8-flash") if isinstance(model_cfg, dict) else "gemini-3.8-flash"
+        fb_model = "gpt-5.6-luna"
+        fbs = cfg.get("fallback_providers", [])
+        if fbs and isinstance(fbs[0], dict):
+            fb_model = fbs[0].get("model", fb_model)
+        print(get_quota_manager().render_markdown(model=primary_model, fallback_model=fb_model))
 
     def _handle_usage_command(self, cmd_original: str):
         """Dispatch `/usage [reset [--force]]`.

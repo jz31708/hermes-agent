@@ -5653,6 +5653,20 @@ class GatewaySlashCommandsMixin:
         except Exception:
             return []
 
+    async def _handle_quota_command(self, event: MessageEvent) -> str:
+        """Handle /quota and /gquota -- show Gemini quota, rate limits, and fallback status without LLM call."""
+        from agent.gemini_quota_manager import get_quota_manager
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+        model_cfg = cfg.get("model", {})
+        primary_model = model_cfg.get("default", "gemini-3.8-flash") if isinstance(model_cfg, dict) else "gemini-3.8-flash"
+        fb_model = "gpt-5.6-sol"
+        fbs = cfg.get("fallback_providers", [])
+        if fbs and isinstance(fbs[0], dict):
+            fb_model = fbs[0].get("model", fb_model)
+        return get_quota_manager().render_markdown(model=primary_model, fallback_model=fb_model)
+
     async def _handle_usage_command(self, event: MessageEvent) -> str:
         """Handle /usage command -- show token usage for the current session.
 

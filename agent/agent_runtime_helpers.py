@@ -1649,6 +1649,29 @@ def restore_primary_runtime(agent) -> bool:
     if getattr(agent, "_rate_limited_until", 0) > time.monotonic():
         return False  # primary still in rate-limit cooldown, stay on fallback
 
+    # ── Gemini Daily Quota Circuit-Breaker Gate ──
+    primary_provider = str(
+        (agent._primary_runtime or {}).get("provider") or ""
+    ).strip().lower()
+    if primary_provider == "gemini":
+        try:
+            from agent.gemini_quota_manager import get_quota_manager
+            qm = get_quota_manager()
+            primary_model = (agent._primary_runtime or {}).get("model") or "gemini-3.8-flash"
+            if qm.is_daily_blocked(primary_model):
+                if not getattr(agent, "_restore_wait_logged", False):
+                    agent._restore_wait_logged = True
+                    logger.info(
+                        "Primary Gemini %s daily quota exhausted until Pacific reset (%s); staying on fallback %s/%s",
+                        primary_model,
+                        qm.get_status(primary_model).next_pacific_reset_paris_str,
+                        agent.provider,
+                        agent.model,
+                    )
+                return False
+        except Exception:
+            pass
+
     # ── Reset-aware gate ──
     # The 60s ``_rate_limited_until`` cooldown covers transient rate limits,
     # but subscription-style providers (Claude Pro/Max 5-hour windows, ChatGPT

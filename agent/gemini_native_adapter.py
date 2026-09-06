@@ -15,6 +15,7 @@ OpenAI-compat layer entirely.
 """
 
 from __future__ import annotations
+import random
 
 import asyncio
 import base64
@@ -180,11 +181,10 @@ def is_free_tier_quota_error(error_message: str) -> bool:
 
 
 _FREE_TIER_GUIDANCE = (
-    "\n\nYour Google API key is on the free tier (a few hundred requests/day "
-    "for Gemini Flash models). Hermes typically makes 3-10 API calls per user turn, "
-    "so the free tier is exhausted in a handful of messages and cannot sustain "
-    "an agent session. Enable billing on your Google Cloud project and "
-    "regenerate the key in a billing-enabled project: "
+    "\n\nYour Google API key has reached its active free tier quota limit. "
+    "Free tier rate limits and daily caps vary dynamically by model, project, and region. "
+    "Check your active rate limits in Google AI Studio or Google Cloud Console, "
+    "or link a billing account on your Google Cloud project to raise quotas: "
     "https://aistudio.google.com/apikey"
 )
 
@@ -1201,41 +1201,124 @@ class GeminiNativeClient:
         if stream:
             return self._stream_completion(model=model, request=request, timeout=timeout)
 
+        from agent.gemini_quota_manager import get_quota_manager
+        qm = get_quota_manager()
+
+        max_attempts = 5
+        attempt = 0
+        last_error = None
         url = f"{self.base_url}/models/{model}:generateContent"
-        response = self._http.post(url, json=request, headers=self._headers(), timeout=timeout)
-        if response.status_code != 200:
-            raise gemini_http_error(response)
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise GeminiAPIError(
-                f"Invalid JSON from Gemini native API: {exc}",
-                code="gemini_invalid_json",
+
+        while attempt < max_attempts:
+            attempt += 1
+            qm.acquire(model)
+            try:
+                response = self._http.post(url, json=request, headers=self._headers(), timeout=timeout)
+            except httpx.HTTPError as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    raise GeminiAPIError(
+                        f"Gemini HTTP request failed: {exc}",
+                        code="gemini_network_error",
+                    ) from exc
+                time.sleep(min(30.0, 1.0 * (2 ** (attempt - 1)) + random.uniform(0.1, 0.4)))
+                continue
+
+            if response.status_code == 200:
+                try:
+                    payload = response.json()
+                except ValueError as exc:
+                    raise GeminiAPIError(
+                        f"Invalid JSON from Gemini native API: {exc}",
+                        code="gemini_invalid_json",
+                        status_code=response.status_code,
+                        response=response,
+                    ) from exc
+                return translate_gemini_response(payload, model=model)
+
+            violation = qm.parse_429_error(
                 status_code=response.status_code,
-                response=response,
-            ) from exc
-        return translate_gemini_response(payload, model=model)
+                headers=response.headers,
+                body_text=response.text,
+                model=model,
+            )
+            if violation and violation.is_daily:
+                qm.block_until_pacific_midnight(model, reason=violation.raw_message or "Daily quota exhausted")
+                raise gemini_http_error(response)
+
+            if response.status_code == 429 and attempt < max_attempts:
+                wait_sec = violation.retry_delay if (violation and violation.retry_delay is not None) else None
+                if wait_sec is None:
+                    wait_sec = min(60.0, 2.0 * (2 ** (attempt - 1)) + random.uniform(0.2, 0.8))
+                logger.warning(
+                    "Gemini transient 429 for %s. Waiting %.2fs before attempt %s/%s...",
+                    model, wait_sec, attempt + 1, max_attempts,
+                )
+                time.sleep(wait_sec)
+                continue
+
+            raise gemini_http_error(response)
+
+        if last_error:
+            raise GeminiAPIError(f"Gemini request failed after {max_attempts} attempts: {last_error}", code="gemini_max_retries")
 
     def _stream_completion(self, *, model: str, request: Dict[str, Any], timeout: Any = None) -> Iterator[_GeminiStreamChunk]:
         url = f"{self.base_url}/models/{model}:streamGenerateContent?alt=sse"
         stream_headers = dict(self._headers())
         stream_headers["Accept"] = "text/event-stream"
 
+        from agent.gemini_quota_manager import get_quota_manager
+        qm = get_quota_manager()
+
         def _generator() -> Iterator[_GeminiStreamChunk]:
-            try:
-                with self._http.stream("POST", url, json=request, headers=stream_headers, timeout=timeout) as response:
-                    if response.status_code != 200:
-                        body_text = read_streaming_error_body(response)
-                        raise gemini_http_error(response, body_text=body_text)
-                    tool_call_indices: Dict[str, Dict[str, Any]] = {}
-                    for event in _iter_sse_events(response):
-                        for chunk in translate_stream_event(event, model, tool_call_indices):
-                            yield chunk
-            except httpx.HTTPError as exc:
-                raise GeminiAPIError(
-                    f"Gemini streaming request failed: {exc}",
-                    code="gemini_stream_error",
-                ) from exc
+            max_attempts = 5
+            attempt = 0
+            has_emitted_chunk = False
+
+            while attempt < max_attempts:
+                attempt += 1
+                qm.acquire(model)
+                try:
+                    with self._http.stream("POST", url, json=request, headers=stream_headers, timeout=timeout) as response:
+                        if response.status_code != 200:
+                            body_text = read_streaming_error_body(response)
+                            violation = qm.parse_429_error(
+                                status_code=response.status_code,
+                                headers=response.headers,
+                                body_text=body_text,
+                                model=model,
+                            )
+                            if violation and violation.is_daily:
+                                qm.block_until_pacific_midnight(model, reason=violation.raw_message or "Daily quota exhausted")
+                                raise gemini_http_error(response, body_text=body_text)
+
+                            if response.status_code == 429 and attempt < max_attempts and not has_emitted_chunk:
+                                wait_sec = violation.retry_delay if (violation and violation.retry_delay is not None) else None
+                                if wait_sec is None:
+                                    wait_sec = min(60.0, 2.0 * (2 ** (attempt - 1)) + random.uniform(0.2, 0.8))
+                                logger.warning(
+                                    "Gemini stream 429 for %s before output. Waiting %.2fs before retry %s/%s...",
+                                    model, wait_sec, attempt + 1, max_attempts,
+                                )
+                                time.sleep(wait_sec)
+                                continue
+
+                            raise gemini_http_error(response, body_text=body_text)
+
+                        tool_call_indices: Dict[str, Dict[str, Any]] = {}
+                        for event in _iter_sse_events(response):
+                            for chunk in translate_stream_event(event, model, tool_call_indices):
+                                has_emitted_chunk = True
+                                yield chunk
+                        return
+                except httpx.HTTPError as exc:
+                    if has_emitted_chunk or attempt >= max_attempts:
+                        raise GeminiAPIError(
+                            f"Gemini streaming request failed: {exc}",
+                            code="gemini_stream_error",
+                        ) from exc
+                    time.sleep(min(30.0, 1.0 * (2 ** (attempt - 1)) + random.uniform(0.1, 0.4)))
+                    continue
 
         return _generator()
 

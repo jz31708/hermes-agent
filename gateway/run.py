@@ -19200,6 +19200,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "compress":
             return await self._handle_compress_command(event)
 
+        if canonical in {"quota", "gquota"}:
+            return await self._handle_quota_command(event)
+
         if canonical == "usage":
             return await self._handle_usage_command(event)
 

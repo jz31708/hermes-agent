@@ -3786,6 +3786,30 @@ def cmd_setup(args):
     run_setup_wizard(args)
 
 
+def cmd_quota(args):
+    """Handler for hermes quota [--json] [--model MODEL]."""
+    from agent.gemini_quota_manager import get_quota_manager
+    from hermes_cli.config import load_config
+    import dataclasses
+
+    cfg = load_config()
+    model_cfg = cfg.get("model", {})
+    primary_model = getattr(args, "model", None) or (
+        model_cfg.get("default", "gemini-3.8-flash") if isinstance(model_cfg, dict) else "gemini-3.8-flash"
+    )
+    fb_model = "gpt-5.6-sol"
+    fbs = cfg.get("fallback_providers", [])
+    if fbs and isinstance(fbs[0], dict):
+        fb_model = fbs[0].get("model", fb_model)
+
+    qm = get_quota_manager()
+    if getattr(args, "json", False):
+        st = qm.get_status(model=primary_model, fallback_model=fb_model)
+        print(json.dumps(dataclasses.asdict(st), indent=2))
+    else:
+        print(qm.render_markdown(model=primary_model, fallback_model=fb_model))
+
+
 def cmd_model(args):
     """Select default model — starts with provider selection, then model picker."""
     _require_tty("model")
@@ -12404,7 +12428,7 @@ def _build_provider_choices() -> list[str]:
 # to parse.
 _BUILTIN_SUBCOMMANDS = frozenset(
     {
-        "acp", "approvals", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
+        "acp", "approvals", "auth", "quota", "gquota", "backup", "bundles", "checkpoints", "claw", "completion",
         "computer-use",
         "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
@@ -13221,6 +13245,19 @@ def main():
     # model command  (parser built in hermes_cli/subcommands/model.py)
     # =========================================================================
     build_model_parser(subparsers, cmd_model=cmd_model)
+
+    # =========================================================================
+    # quota command
+    # =========================================================================
+    quota_parser = subparsers.add_parser(
+        "quota",
+        aliases=["gquota"],
+        help="Show Gemini quota, rate limits, and fallback status",
+        description="Inspect Gemini quota, observed daily attempts, RPM pacer status, and Codex fallback.",
+    )
+    quota_parser.add_argument("--json", action="store_true", help="Output status in JSON format")
+    quota_parser.add_argument("--model", default=None, help="Gemini model to inspect (default from config)")
+    quota_parser.set_defaults(func=cmd_quota)
 
     from hermes_cli.moa_cmd import cmd_moa
 
