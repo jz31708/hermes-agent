@@ -690,7 +690,7 @@ class GeminiQuotaManager:
 
     # ── Reporting & Status for /quota and CLI ─────────────────────────────────
 
-    def get_status(self, model: str = "gemini-3.8-flash", fallback_model: Optional[str] = "gpt-5.6-sol") -> QuotaStatus:
+    def get_status(self, model: str = "gemini-3.8-flash", fallback_model: Optional[str] = "gpt-5.6-luna") -> QuotaStatus:
         """Produce honest, comprehensive quota status descriptor."""
         policy = self.get_effective_policy(model)
         attempts_today = self.storage.count_attempts_today(model, self.current_pacific_day())
@@ -746,7 +746,7 @@ class GeminiQuotaManager:
             fallback_model=fallback_model,
         )
 
-    def render_markdown(self, model: str = "gemini-3.8-flash", fallback_model: Optional[str] = "gpt-5.6-sol") -> str:
+    def render_markdown(self, model: str = "gemini-3.8-flash", fallback_model: Optional[str] = "gpt-5.6-luna") -> str:
         """Render honest terminal/chat display without invoking any LLM."""
         st = self.get_status(model=model, fallback_model=fallback_model)
 

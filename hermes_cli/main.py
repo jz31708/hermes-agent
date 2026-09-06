@@ -3797,7 +3797,7 @@ def cmd_quota(args):
     primary_model = getattr(args, "model", None) or (
         model_cfg.get("default", "gemini-3.8-flash") if isinstance(model_cfg, dict) else "gemini-3.8-flash"
     )
-    fb_model = "gpt-5.6-sol"
+    fb_model = "gpt-5.6-luna"
     fbs = cfg.get("fallback_providers", [])
     if fbs and isinstance(fbs[0], dict):
         fb_model = fbs[0].get("model", fb_model)

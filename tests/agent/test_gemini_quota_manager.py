@@ -687,22 +687,22 @@ class TestQuotaStatusRendering:
 
     def test_status_honest_unknown_labels(self, qm):
         """Unknown limits must be labeled as 'inconnue', never manufactured."""
-        md = qm.render_markdown("gemini-3.8-flash", fallback_model="gpt-5.6-sol")
+        md = qm.render_markdown("gemini-3.8-flash", fallback_model="gpt-5.6-luna")
         assert "Limite RPD effective : inconnue" in md
         assert "RPM : 0 / inconnue" in md
         assert "TPM : inconnue" in md
         assert "Circuit Gemini : 🟢 disponible" in md
-        assert "Fallback Codex : gpt-5.6-sol" in md
+        assert "Fallback Codex : gpt-5.6-luna" in md
         assert "America/Los_Angeles" in md
         assert "Europe/Paris" in md
 
     def test_status_known_runtime_limits(self, qm):
         qm.learn_quota_limits("gemini-3.8-flash", rpd_limit=20, rpm_limit=5, source="runtime_evidence")
-        md = qm.render_markdown("gemini-3.8-flash", fallback_model="gpt-5.6-sol")
+        md = qm.render_markdown("gemini-3.8-flash", fallback_model="gpt-5.6-luna")
         assert "Limite RPD effective : 20 [runtime_evidence]" in md
         assert "Restant estimé : 20 / 20" in md
         assert "RPM : 0 / 5" in md
-        assert "Fallback Codex : gpt-5.6-sol" in md
+        assert "Fallback Codex : gpt-5.6-luna" in md
 
 
 # ── 9. Gate 4: End-to-End Surfaces & Fallback Tests ─────────────────────────
@@ -755,7 +755,7 @@ class TestGate4E2ESurfacesAndFallback:
         assert "Gemini API" in reply_gquota
 
     def test_gate_4b_complete_fallback_without_google_consumption(self, temp_storage, fake_clock):
-        """Gate 4B: Gemini primary -> inject RPD -> fallback openai-codex/gpt-5.6-sol
+        """Gate 4B: Gemini primary -> inject RPD -> fallback openai-codex/gpt-5.6-luna
         -> new turn sticky (zero Gemini calls) -> Pacific reset -> Gemini restored.
         """
         from agent.agent_runtime_helpers import restore_primary_runtime
@@ -771,7 +771,7 @@ class TestGate4E2ESurfacesAndFallback:
             return MagicMock()
 
         with patch("agent.gemini_quota_manager.get_quota_manager", return_value=qm):
-            # Initialize agent with primary gemini and fallback gpt-5.6-sol
+            # Initialize agent with primary gemini and fallback gpt-5.6-luna
             agent = MagicMock()
             agent.model = "gemini-3.8-flash"
             agent.provider = "gemini"
@@ -793,7 +793,7 @@ class TestGate4E2ESurfacesAndFallback:
                 "compressor_api_key": "fake-gemini-key",
                 "compressor_provider": "gemini",
             }
-            agent.fallback_model = [{"provider": "openai-codex", "model": "gpt-5.6-sol"}]
+            agent.fallback_model = [{"provider": "openai-codex", "model": "gpt-5.6-luna"}]
 
             # Simulate initial turn: 1 call to Gemini
             _mock_gemini_call()
@@ -805,19 +805,19 @@ class TestGate4E2ESurfacesAndFallback:
 
             # Trigger fallback activation
             agent.provider = "openai-codex"
-            agent.model = "gpt-5.6-sol"
+            agent.model = "gpt-5.6-luna"
             agent._fallback_activated = True
             agent._fallback_index = 1
 
             assert agent.provider == "openai-codex"
-            assert agent.model == "gpt-5.6-sol"
+            assert agent.model == "gpt-5.6-luna"
 
             # New turn: restore_primary_runtime is called
             # Must return False and remain on fallback, making ZERO Gemini calls
             restore_result = restore_primary_runtime(agent)
             assert restore_result is False
             assert agent.provider == "openai-codex"
-            assert agent.model == "gpt-5.6-sol"
+            assert agent.model == "gpt-5.6-luna"
             assert gemini_call_count[0] == 1  # Zero Gemini calls made during daily block
 
             # Advance clock past Pacific midnight (simulate daily reset)
